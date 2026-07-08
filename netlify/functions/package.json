@@ -1,0 +1,7 @@
+{
+  "name": "planner-push-functions",
+  "type": "module",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}
