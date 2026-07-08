@@ -1,5 +1,4 @@
 {
-  "name": "planner-push-functions",
   "dependencies": {
     "web-push": "^3.6.7"
   }

@@ -9,11 +9,10 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webPush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
 
-exports.handler = async (event) => {
+module.exports.handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Type': 'application/json',
   };
 
   if (event.httpMethod === 'OPTIONS') {
@@ -29,7 +28,6 @@ exports.handler = async (event) => {
       return { statusCode: 500, headers, body: JSON.stringify({ error: 'VAPID keys não configuradas' }) };
     }
 
-    // 1. Buscar alarmes pendentes do Apps Script
     const alarmsRes = await fetch(SHEETS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -38,67 +36,49 @@ exports.handler = async (event) => {
     const alarmsData = await alarmsRes.json();
 
     if (!alarmsData.success || !alarmsData.alarms || alarmsData.alarms.length === 0) {
-      return { statusCode: 200, headers, body: JSON.stringify({ success: true, sent: 0, message: 'Nenhum alarme pendente' }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, sent: 0 }) };
     }
 
-    // 2. Buscar inscrições push
     const subsRes = await fetch(SHEETS_URL + '?action=list&entity=pushSubscriptions');
     const subsData = await subsRes.json();
 
     if (!subsData.success || !subsData.data || !subsData.data.pushSubscriptions) {
-      return { statusCode: 200, headers, body: JSON.stringify({ success: true, sent: 0, message: 'Nenhuma inscrição push' }) };
+      return { statusCode: 200, headers, body: JSON.stringify({ success: true, sent: 0 }) };
     }
 
     const subscriptions = subsData.data.pushSubscriptions;
-
-    // 3. Enviar push
     let sent = 0;
-    let failed = 0;
 
     for (const alarm of alarmsData.alarms) {
       const userSubs = subscriptions.filter(s => String(s.userId) === String(alarm.userId));
 
       for (const sub of userSubs) {
-        const pushSubscription = {
-          endpoint: sub.endpoint,
-          keys: { p256dh: sub.p256dh, auth: sub.auth },
-        };
-
-        const payload = JSON.stringify({
-          title: alarm.type === 'task' ? '📋 ' + alarm.title : '📅 ' + alarm.title,
-          body: alarm.body,
-          tag: alarm.tag,
-          icon: '/icons/icon-192x192.png',
-          badge: '/icons/icon-192x192.png',
-          vibrate: [300, 200, 300],
-        });
-
         try {
-          await webPush.sendNotification(pushSubscription, payload, { TTL: 60, urgency: 'high' });
+          await webPush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            JSON.stringify({
+              title: alarm.type === 'task' ? '📋 ' + alarm.title : '📅 ' + alarm.title,
+              body: alarm.body,
+              tag: alarm.tag,
+              icon: '/icons/icon-192x192.png',
+              vibrate: [300, 200, 300],
+            }),
+            { TTL: 60 }
+          );
           sent++;
         } catch (err) {
-          console.error('Push failed:', err.message);
-          failed++;
-
           if (err.statusCode === 404 || err.statusCode === 410) {
-            try {
-              await fetch(SHEETS_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'unsubscribe', endpoint: sub.endpoint, userId: sub.userId }),
-              });
-            } catch {}
+            await fetch(SHEETS_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({ action: 'unsubscribe', endpoint: sub.endpoint, userId: sub.userId }),
+            }).catch(() => {});
           }
         }
       }
     }
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ success: true, alarms: alarmsData.alarms.length, sent, failed }),
-    };
-
+    return { statusCode: 200, headers, body: JSON.stringify({ success: true, alarms: alarmsData.alarms.length, sent }) };
   } catch (err) {
     return { statusCode: 500, headers, body: JSON.stringify({ error: String(err) }) };
   }
